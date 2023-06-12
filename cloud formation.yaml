@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+  Description: Deploy terraform for s3 and synamodb infrastructure for tfstate file maintainance
+  Parameters:
+    StateBucketName:
+      Type: String
+      Description: Name of the S3 bucket for terraform state
+    LockTableName:
+      Type: String
+      Description: Name of the terraform DynamoDB lock table
+
+  Resources:
+    TerraformStateBucket:
+      Type: 'AWS::S3::Bucket'
+      DeletionPolicy: Retain
+      UpdateReplacePolicy: Retain
+      Properties:
+        BucketName: !Ref StateBucketName
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: aws:kms
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: True
+          BlockPublicPolicy: True
+          IgnorePublicAcls: True
+          RestrictPublicBuckets: True
+        VersioningConfiguration:
+          Status: Enabled
+        LifecycleConfiguration:
+          Rules:
+            - Id: delete-after
+              Status: Enabled
+              ExpirationInDays: 365
+
+    TerraformStateLockTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      UpdateReplacePolicy: Retain
+      Properties:
+        TableName: !Ref LockTableName
+        AttributeDefinitions:
+          - AttributeName: LockID
+            AttributeType: S
+        KeySchema:
+          - AttributeName: LockID
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
