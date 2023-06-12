@@ -1,0 +1,68 @@
+version: 0.2
+env:
+  shell: bash
+  variables:
+    min_cov: 50
+    REPO_OWNER: Vonage
+    REPO_NAME: rbac
+    STATUS_CONTEXT: CodePipeline/Unittests
+    STATUS_DESCRIPTION: Unit tests passed
+    STATUS_STATE: success
+    GITHUB_TOKEN: ""
+    CURRENT_TIMESTAMP: ""
+phases:
+  install:
+    commands:
+      - echo "Python Version..."
+      - python --version
+      - echo "Install dependencies in requirements folder..."
+      - pip install -r requirements/requirements.dev.txt
+  build:
+    commands:
+      - echo "Install Coverage to run coverage run command..."
+      - pip3 install coverage
+      - echo "Execute TCs with coverage..."
+      - python3 -m coverage run -m unittest
+  post_build:
+    commands:
+      - echo "Retrieve GitHub access token from Secrets Manager..."
+      - GITHUB_TOKEN=$(aws secretsmanager get-secret-value --secret-id dev/githubtoken/secret | jq -r '.SecretString | fromjson | .GITHUB_TOKEN')
+      - echo "Generate coverage report in txt format..."
+      - coverage report --omit="tests/*" -m > Coverage_Report.txt
+      - echo "Display coverage Report..."
+      - coverage report --omit="tests/*" -m
+      - echo "Send reports to s3 Bucket..."
+      - CURRENT_TIMESTAMP=$(date +'%Y-%m-%d_%H:%M:%S')
+      - aws s3api put-object --bucket $S3_Bucket --key "rbac-handler-unittest-report/unit_test_report_$CURRENT_TIMESTAMP" --body Coverage_Report.txt
+      - cov_total=$(awk '$1 == "TOTAL" {print $NF+0}' Coverage_Report.txt)
+      - echo $cov_total
+      - echo "Installing package bc..."
+      - yum install bc -y
+      - echo "Package bc installed successfully..."
+      - if (( $(echo "$cov_total < $min_cov" | bc -l) )); then echo "$cov_total% of code coverage is below threshold of $min_cov%" && exit 1; else exit 0; fi
+      - echo "Build Succeeded"
+      - |
+        # Add status update using GitHub REST API
+        # Retrieve the commit SHA using CodePipeline metadata
+        COMMIT_SHA=$(aws codepipeline get-pipeline-state --name rbac-handler-codepipeline-phase2 --query "stageStates[?stageName=='Source'].actionStates[0].latestExecution.externalExecutionId" --output text)
+        echo "COMMIT_SHA: $COMMIT_SHA"
+        REPORT_FOLDER="rbac-handler-unittest-report/unit_test_report_$CURRENT_TIMESTAMP"
+        GITHUB_API="https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/statuses/$COMMIT_SHA"
+        echo "GitHub API URL: $GITHUB_API"
+        TARGET_URL="https://s3.amazonaws.com/$S3_Bucket/$REPORT_FOLDER"
+        echo "TARGET_URL: $TARGET_URL"
+        curl -L --http1.1 \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -d '{
+          "state": "success",
+          "target_url": "'"$TARGET_URL"'",
+          "description": "The build succeeded!",
+          "context": "continuous-integration/codebuild"
+          }' \
+          "$GITHUB_API"
+artifacts:
+  files:
+    - '**/*'
